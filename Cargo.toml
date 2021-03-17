@@ -1,0 +1,9 @@
+[package]
+authors = ["Kai Schmidt <kai.schmidt@constructioninnovations.com>"]
+edition = "2018"
+name = "now_many"
+version = "0.1.0"
+
+[dependencies]
+serde.features = ["derive"]
+serde.version = "1"
