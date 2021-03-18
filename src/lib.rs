@@ -7,97 +7,146 @@ use std::{
 
 use serde::*;
 
-pub trait ItemBuilder<V> {
-    type Item;
-    fn build_item(val: V) -> Self::Item;
-    fn build<'de, D>(deserializer: D) -> Result<Self::Item, D::Error>
+pub trait Conversion<T> {
+    type Output;
+    fn convert(val: T) -> Self::Output;
+    fn de<'de, D>(deserializer: D) -> Result<Self::Output, D::Error>
     where
         D: Deserializer<'de>,
-        V: Deserialize<'de>,
-        Self::Item: Deserialize<'de>,
+        T: Deserialize<'de>,
+        Self::Output: Deserialize<'de>,
     {
-        Ok(
-            match OldOrNew::<V, Self::Item>::deserialize(deserializer)? {
-                OldOrNew::Old(old) => Self::build_item(old),
-                OldOrNew::New(new) => new,
-            },
-        )
-    }
-    fn convert<'de, D, T>(deserializer: D) -> Result<T, D::Error>
-    where
-        D: Deserializer<'de>,
-        V: Deserialize<'de>,
-        T: From<Self::Item> + Deserialize<'de>,
-    {
-        Ok(match OldOrNew::<V, T>::deserialize(deserializer)? {
-            OldOrNew::Old(old) => Self::build_item(old).into(),
-            OldOrNew::New(new) => new,
-        })
-    }
-    fn collect<'de, D, T>(deserializer: D) -> Result<T, D::Error>
-    where
-        D: Deserializer<'de>,
-        V: Deserialize<'de>,
-        T: FromIterator<Self::Item> + Deserialize<'de>,
-    {
-        Ok(match OldOrNew::<V, T>::deserialize(deserializer)? {
-            OldOrNew::Old(val) => once(Self::build_item(val)).collect(),
-            OldOrNew::New(collection) => collection,
-        })
+        OldOrNew::<T, Self::Output>::deserialize(deserializer)
+            .map(|oon| oon.into_new(Self::convert))
     }
 }
 
-pub struct SingleValue(PhantomData<()>);
+pub struct Convert<T, U>(PhantomData<(T, U)>);
 
-impl<V> ItemBuilder<V> for SingleValue {
-    type Item = V;
-    fn build_item(val: V) -> Self::Item {
-        val
-    }
-}
-
-pub struct KeyValue<K>(PhantomData<K>);
-
-impl<K, V> ItemBuilder<V> for KeyValue<K>
+impl<T, U> Conversion<T> for Convert<T, U>
 where
-    K: Default,
+    T: Into<U>,
 {
-    type Item = (K, V);
-    fn build_item(val: V) -> Self::Item {
-        (K::default(), val)
+    type Output = U;
+    fn convert(val: T) -> Self::Output {
+        val.into()
+    }
+}
+
+pub struct Collect<C>(PhantomData<C>);
+
+impl<C, I> Conversion<I> for Collect<C>
+where
+    C: FromIterator<I>,
+{
+    type Output = C;
+    fn convert(val: I) -> Self::Output {
+        once(val).collect()
+    }
+}
+
+pub struct TryConvert<T, U>(PhantomData<(T, U)>);
+
+impl<T, U> Conversion<T> for TryConvert<T, U>
+where
+    T: TryInto<U>,
+{
+    type Output = Result<U, T::Error>;
+    fn convert(val: T) -> Self::Output {
+        val.try_into()
+    }
+}
+
+pub struct TryConvertOrDefault<T, U>(PhantomData<(T, U)>);
+
+impl<T, U> Conversion<T> for TryConvertOrDefault<T, U>
+where
+    T: TryInto<U>,
+    U: Default,
+{
+    type Output = U;
+    fn convert(val: T) -> Self::Output {
+        val.try_into().unwrap_or_default()
+    }
+}
+
+pub struct Parse<T>(PhantomData<T>);
+
+impl<T> Conversion<String> for Parse<T>
+where
+    T: FromStr,
+{
+    type Output = Result<T, T::Err>;
+    fn convert(val: String) -> Self::Output {
+        val.parse()
     }
 }
 
 pub struct ParseOrDefault<T>(PhantomData<T>);
 
-impl<T> ItemBuilder<String> for ParseOrDefault<T>
+impl<T> Conversion<String> for ParseOrDefault<T>
 where
     T: FromStr + Default,
 {
-    type Item = T;
-    fn build_item(val: String) -> Self::Item {
+    type Output = T;
+    fn convert(val: String) -> Self::Output {
         val.parse().unwrap_or_default()
     }
 }
 
-pub struct TryIntoOrDefault<T, U>(PhantomData<(T, U)>);
+pub struct Compose<A, B>(PhantomData<(A, B)>);
 
-impl<T, U> ItemBuilder<T> for TryIntoOrDefault<T, U>
+impl<A, B, T, U, V> Conversion<T> for Compose<A, B>
 where
-    T: TryInto<U>,
-    U: Default,
+    A: Conversion<T, Output = U>,
+    B: Conversion<U, Output = V>,
 {
-    type Item = U;
-    fn build_item(val: T) -> Self::Item {
-        val.try_into().unwrap_or_default()
+    type Output = V;
+    fn convert(val: T) -> Self::Output {
+        B::convert(A::convert(val))
+    }
+}
+
+pub struct Identity<T>(PhantomData<T>);
+
+impl<T> Conversion<T> for Identity<T> {
+    type Output = T;
+    fn convert(val: T) -> Self::Output {
+        val
+    }
+}
+
+pub struct Map<F, C>(PhantomData<(F, C)>);
+
+impl<F, I, C> Conversion<I> for Map<F, C>
+where
+    F: Conversion<I::Item>,
+    I: IntoIterator,
+    C: FromIterator<F::Output>,
+{
+    type Output = C;
+    fn convert(val: I) -> Self::Output {
+        val.into_iter().map(F::convert).collect()
     }
 }
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(untagged)]
-enum OldOrNew<O, N> {
-    Old(O),
+pub enum OldOrNew<O, N> {
     New(N),
+    Old(O),
+}
+
+impl<O, N> OldOrNew<O, N> {
+    pub fn into_new<F>(self, f: F) -> N
+    where
+        F: Fn(O) -> N,
+    {
+        match self {
+            OldOrNew::Old(old) => f(old),
+            OldOrNew::New(new) => new,
+        }
+    }
 }
 
 #[test]
@@ -109,7 +158,7 @@ fn test() {
     #[derive(Debug, PartialEq, Deserialize)]
     struct NewFoo {
         #[serde(
-            deserialize_with = "TryIntoOrDefault::<u64, _>::collect",
+            deserialize_with = "Compose::<TryConvertOrDefault::<u64, _>, Collect::<_>>::de",
             alias = "val"
         )]
         vals: Vec<u32>,
