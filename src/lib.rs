@@ -45,6 +45,19 @@ where
     }
 }
 
+pub struct CollectDefaultKey<K, C>(PhantomData<(K, C)>);
+
+impl<C, K, V> Conversion<V> for CollectDefaultKey<K, C>
+where
+    K: Default,
+    C: FromIterator<(K, V)>,
+{
+    type Output = C;
+    fn convert(val: V) -> Self::Output {
+        once((K::default(), val)).collect()
+    }
+}
+
 pub struct TryConvert<T, U>(PhantomData<(T, U)>);
 
 impl<T, U> Conversion<T> for TryConvert<T, U>
