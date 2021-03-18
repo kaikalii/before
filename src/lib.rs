@@ -17,7 +17,7 @@ pub trait Conversion<T> {
         Self::Output: Deserialize<'de>,
     {
         OldOrNew::<T, Self::Output>::deserialize(deserializer)
-            .map(|oon| oon.into_new(Self::convert))
+            .map(|oon| oon.into_new_with(Self::convert))
     }
 }
 
@@ -130,15 +130,27 @@ where
     }
 }
 
-#[derive(Debug, Clone, Deserialize)]
+pub struct ToString(PhantomData<()>);
+
+impl<T> Conversion<T> for ToString
+where
+    T: std::string::ToString,
+{
+    type Output = String;
+    fn convert(val: T) -> Self::Output {
+        val.to_string()
+    }
+}
+
+#[derive(Deserialize)]
 #[serde(untagged)]
-pub enum OldOrNew<O, N> {
+enum OldOrNew<O, N> {
     New(N),
     Old(O),
 }
 
 impl<O, N> OldOrNew<O, N> {
-    pub fn into_new<F>(self, f: F) -> N
+    pub fn into_new_with<F>(self, f: F) -> N
     where
         F: Fn(O) -> N,
     {
@@ -150,7 +162,7 @@ impl<O, N> OldOrNew<O, N> {
 }
 
 #[test]
-fn test() {
+fn simple_test() {
     #[derive(Serialize)]
     struct OldFoo {
         val: u64,
