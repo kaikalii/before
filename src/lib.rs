@@ -17,7 +17,7 @@ pub trait Conversion<T> {
         Self::Output: Deserialize<'de>,
     {
         OldOrNew::<T, Self::Output>::deserialize(deserializer)
-            .map(|oon| oon.into_new_with(Self::convert))
+            .map(|oon| oon.into_new(Self::convert))
     }
 }
 
@@ -150,7 +150,7 @@ enum OldOrNew<O, N> {
 }
 
 impl<O, N> OldOrNew<O, N> {
-    pub fn into_new_with<F>(self, f: F) -> N
+    pub fn into_new<F>(self, f: F) -> N
     where
         F: Fn(O) -> N,
     {
